@@ -88,6 +88,7 @@ This system is designed for developers who want to integrate weather data into t
 ## 7. Final Architecture
 ### Cloud Mechanisms:
 - **AWS Step Functions:** Orchestrates the workflow of the application.
+![Step Functions Graph](images/step-fuction-graph.png)
 - **AWS Lambda Functions:** Perform specific tasks like fetching weather data, storing it in DynamoDB, or sending an SMS notification.
 - **Amazon DynamoDB:** Stores the weather data retrieved from the external API.
 - **AWS Secrets Manager:** Securely stores API keys.
