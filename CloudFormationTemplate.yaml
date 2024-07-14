@@ -1,0 +1,283 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Resources:
+  MyCFStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineType: EXPRESS
+      DefinitionString: 
+        Fn::Sub:
+          - |
+            {
+              "Comment": "A description of my state machine",
+              "StartAt": "weather-api-sns",
+              "States": {
+                "weather-api-sns": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::lambda:invoke",
+                  "OutputPath": "$.Payload",
+                  "Parameters": {
+                    "Payload.$": "$",
+                    "FunctionName": "${FunctionArn}"
+                  },
+                  "Retry": [
+                    {
+                      "ErrorEquals": [
+                        "Lambda.ServiceException",
+                        "Lambda.AWSLambdaException",
+                        "Lambda.SdkClientException",
+                        "Lambda.TooManyRequestsException"
+                      ],
+                      "IntervalSeconds": 1,
+                      "MaxAttempts": 3,
+                      "BackoffRate": 2
+                    }
+                  ],
+                  "Next": "Select Weather Data Type"
+                },
+                "Select Weather Data Type": {
+                  "Type": "Choice",
+                  "Choices": [
+                    {
+                      "Variable": "$.action",
+                      "StringMatches": "current",
+                      "Next": "current-weather"
+                    },
+                    {
+                      "Variable": "$.action",
+                      "StringMatches": "timestamp",
+                      "Next": "timestamp-weather"
+                    }
+                  ]
+                },
+                "current-weather": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::lambda:invoke",
+                  "OutputPath": "$.Payload",
+                  "Parameters": {
+                    "Payload.$": "$",
+                    "FunctionName": "${FunctionArnCurrentWeather}"
+                  },
+                  "Retry": [
+                    {
+                      "ErrorEquals": [
+                        "Lambda.ServiceException",
+                        "Lambda.AWSLambdaException",
+                        "Lambda.SdkClientException",
+                        "Lambda.TooManyRequestsException"
+                      ],
+                      "IntervalSeconds": 1,
+                      "MaxAttempts": 3,
+                      "BackoffRate": 2
+                    }
+                  ],
+                  "Next": "return-current-weather"
+                },
+                "return-current-weather": {
+                  "Type": "Pass",
+                  "End": true,
+                  "InputPath": "$.weatherData"
+                },
+                "timestamp-weather": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::lambda:invoke",
+                  "OutputPath": "$.Payload",
+                  "Parameters": {
+                    "Payload.$": "$",
+                    "FunctionName": "${FunctionArnTimestampWeather}"
+                  },
+                  "Retry": [
+                    {
+                      "ErrorEquals": [
+                        "Lambda.ServiceException",
+                        "Lambda.AWSLambdaException",
+                        "Lambda.SdkClientException",
+                        "Lambda.TooManyRequestsException"
+                      ],
+                      "IntervalSeconds": 1,
+                      "MaxAttempts": 3,
+                      "BackoffRate": 2
+                    }
+                  ],
+                  "Next": "retun-timestamp-weather"
+                },
+                "retun-timestamp-weather": {
+                  "Type": "Pass",
+                  "End": true,
+                  "InputPath": "$.weatherData"
+                }
+              }
+            }
+          - FunctionArn: !GetAtt WeatherSNSFunction.Arn 
+            FunctionArnCurrentWeather: !GetAtt CurrentWeatherFunction.Arn 
+            FunctionArnTimestampWeather: !GetAtt TimestampWeatherFunction.Arn
+      RoleArn: "arn:aws:iam::407548629345:role/LabRole"
+      LoggingConfiguration:
+        IncludeExecutionData: True
+        Destinations:
+          - CloudWatchLogsLogGroup: 
+              LogGroupArn: !GetAtt CloudWatchLogsLogGroup.Arn
+        Level: ALL
+  
+  CloudWatchLogsLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: "/aws/states/MyCFStateMachine-executions"
+
+  WeatherSNSFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "js-weather-sns-cf"
+      Runtime: "nodejs20.x"
+      Role: "arn:aws:iam::407548629345:role/LabRole"
+      Handler: "index.handler"
+      Timeout: 120
+      MemorySize: 128
+      Environment:
+        Variables:
+          CFWeatherSnsTopicArn: !Ref CFWeatherSnsTopic
+          GoogleMapsApiKeySecretName: !Ref GoogleMapsApiKeySecret
+      Code:
+        S3Bucket: "stepfunctions-lambda-bucket"
+        S3Key: "sns-lambda.zip"
+          
+  CurrentWeatherFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "js-current-weather-cf"
+      Runtime: "nodejs20.x"
+      Role: "arn:aws:iam::407548629345:role/LabRole"
+      Handler: "index.handler"
+      Timeout: 120
+      MemorySize: 128
+      Environment:
+        Variables:
+          OpenWeatherApiKeySecretName: !Ref OpenWeatherApiKeySecret
+          CFDynamoDBWeatherTableName: !Ref CFDynamoDBWeatherTable
+      Code:
+        S3Bucket: "stepfunctions-lambda-bucket"
+        S3Key: "current-lambda.zip"
+  
+  TimestampWeatherFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "js-timestamp-weather-cf"
+      Runtime: "nodejs20.x"
+      Role: "arn:aws:iam::407548629345:role/LabRole"
+      Handler: "index.handler"
+      Timeout: 120
+      MemorySize: 128
+      Environment:
+        Variables:
+          OpenWeatherApiKeySecretName: !Ref OpenWeatherApiKeySecret
+          CFDynamoDBWeatherTableName: !Ref CFDynamoDBWeatherTable
+      Code:
+        S3Bucket: "stepfunctions-lambda-bucket"
+        S3Key: "timestamp-lambda.zip"
+    
+  CFDynamoDBWeatherTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: CFDynamoDBWeatherTable
+      AttributeDefinitions:
+        - AttributeName: location
+          AttributeType: S
+      KeySchema:
+        - AttributeName: location
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+  GoogleMapsApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: GOOGLE_MAPS_API_KEY_CF
+      Description: Access to Google Maps API
+      SecretString: "AIzaSyCm4VRL32Ubh9ff0S-N8idhvHaEKrUrcgA"
+
+  OpenWeatherApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: OPEN_WEATHER_API_KEY_CF
+      Description: Access to Open Weather Map API
+      SecretString: "1aa3782fca2dfba325d43a9bc657ddb5"
+
+  CFWeatherSnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: CFWeatherTopic
+      Subscription:
+        - Protocol: sms
+          Endpoint: "+16478894286" 
+
+  CFWeatherApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: GetWeatherDataCF
+      Description: API to access weather Data
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  CFWeatherApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref CFWeatherApiGateway
+      ParentId: !GetAtt CFWeatherApiGateway.RootResourceId
+      PathPart: weatherscope
+
+  CFWeatherApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref CFWeatherApiGateway
+      ResourceId: !Ref CFWeatherApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: "Empty"
+      RequestParameters: {} 
+      RequestModels: {}      
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS
+        Uri: 
+          Fn::Join:
+            - ""
+            - - "arn:aws:apigateway:"
+              - Ref: AWS::Region
+              - ":states:action/StartSyncExecution"
+        Credentials: "arn:aws:iam::407548629345:role/LabRole"
+        RequestTemplates:
+          application/json: 
+            Fn::Sub:
+              - |
+                  #set($input = $input.json('$'))
+                  {
+                    "input": "$util.escapeJavaScript($input)",
+                    "stateMachineArn": "${MyCFStateMachineArn}"
+                  }
+              - MyCFStateMachineArn: !GetAtt MyCFStateMachine.Arn
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseTemplates:
+              application/json: |
+                #set($inputRoot = $input.path('$'))
+                {
+                    "output": "$inputRoot.output"
+                }
+
+  CFWeatherApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref CFWeatherApiGateway
+      DeploymentId: !Ref CFWeatherApiDeployment
+      StageName: v1
+
+  CFWeatherApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: CFWeatherApiMethod
+    Properties:
+      RestApiId: !Ref CFWeatherApiGateway
